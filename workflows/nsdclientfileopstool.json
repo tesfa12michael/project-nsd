@@ -1,0 +1,151 @@
+{
+  "name": "NSD — Client File Ops (AI Tool)",
+  "nodes": [
+    {
+      "id": "4491b0ac-6a7b-4bad-8db6-0b38510ec7cd",
+      "name": "When Called by Agent",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "workflowInputs",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "action",
+              "type": "string"
+            },
+            {
+              "name": "path",
+              "type": "string"
+            },
+            {
+              "name": "key",
+              "type": "string"
+            },
+            {
+              "name": "value",
+              "type": "string"
+            },
+            {
+              "name": "content",
+              "type": "string"
+            },
+            {
+              "name": "envFile",
+              "type": "string"
+            },
+            {
+              "name": "clientName",
+              "type": "string"
+            },
+            {
+              "name": "runId",
+              "type": "string"
+            },
+            {
+              "name": "attempt",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "8305cc71-6792-43e9-a8a0-c156e08a40d2",
+      "name": "Validate and Build Command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const j = $input.first().json;\nconst action = String(j.action || '').toLowerCase().trim();\nlet rel = String(j.path || '').trim();\nwhile (rel.length && rel.charAt(0) === '/') rel = rel.slice(1);\nconst client = String(j.clientName || '').trim();\nconst key = String(j.key || '').trim();\nconst envFile = String(j.envFile || '').toLowerCase().trim();\nlet val = j.value != null ? String(j.value) : '';\nval = val.split(String.fromCharCode(10)).join(' ').split(String.fromCharCode(13)).join('').split('\"').join('');\nif (val.length > 2000) val = val.slice(0, 2000);\nconst contentStr = j.content != null ? String(j.content) : '';\nlet runId = String(j.runId || 'run');\nlet cleanRun = '';\nfor (let i = 0; i < runId.length; i++) { const c = runId.charAt(i); if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c === '_' || c === '-') cleanRun += c; }\nif (!cleanRun) cleanRun = 'run';\nlet attempt = ''; const ar = String(j.attempt || '0'); for (let i = 0; i < ar.length; i++) { const c = ar.charAt(i); if (c >= '0' && c <= '9') attempt += c; } if (!attempt) attempt = '0';\nconst BASE = '/opt/ansible';\nfunction out(o) { return [{ json: o }]; }\nfunction block(reason) { return out({ allowed: false, action: action, mode: 'blocked', message: 'BLOCKED: ' + reason, preparedCommand: 'echo BLOCKED' }); }\nfunction lowerDash(s) { if (!s.length) return false; for (let i = 0; i < s.length; i++) { const c = s.charAt(i); if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c === '-')) return false; } return true; }\nfunction safePath(s) { if (!s.length) return false; if (s.indexOf('..') !== -1) return false; for (let i = 0; i < s.length; i++) { const c = s.charAt(i); if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c === '.' || c === '_' || c === '-' || c === '/')) return false; } return true; }\nfunction b64(s) { return Buffer.from(s, 'utf8').toString('base64'); }\nif (!lowerDash(client)) return block('invalid clientName');\nconst CD = 'clients/' + client + '/';\nconst BAK = BASE + '/backups/' + cleanRun;\nfunction writeCmd(path, contentB64, bakName) {\n  return 'mkdir -p ' + BAK + ' && cp -a ' + BASE + '/' + path + ' ' + BAK + '/' + bakName + ' 2>/dev/null; echo ' + contentB64 + ' | base64 -d > ' + BASE + '/' + path + ' && echo \"=== DIFF ===\" && diff -u ' + BAK + '/' + bakName + ' ' + BASE + '/' + path + ' 2>/dev/null | head -c 3000; echo; echo \"WROTE_OK:' + path + '\"';\n}\nfunction appendLineCmd(path, lineB64, removalKey, bakName) {\n  return 'mkdir -p ' + BAK + ' && cp -a ' + BASE + '/' + path + ' ' + BAK + '/' + bakName + ' 2>/dev/null; grep -v \"^' + removalKey + '\" ' + BASE + '/' + path + ' > ' + BASE + '/' + path + '.tmp 2>/dev/null; echo ' + lineB64 + ' | base64 -d >> ' + BASE + '/' + path + '.tmp; mv ' + BASE + '/' + path + '.tmp ' + BASE + '/' + path + ' && echo \"=== DIFF ===\" && diff -u ' + BAK + '/' + bakName + ' ' + BASE + '/' + path + ' 2>/dev/null | head -c 3000; echo; echo SET_OK';\n}\nif (action === 'read') {\n  if (!safePath(rel)) return block('bad path');\n  const low = rel.toLowerCase();\n  if (low.indexOf('ssh-keys/') !== -1 || low.indexOf('vault') !== -1 || low.slice(-4) === '.key' || low.slice(-4) === '.pem') return block('secret path');\n  const clientOk = (rel === CD + 'vars.yml' || rel === CD + 'inventory.ini' || rel === CD + 'modsec-overrides.conf' || rel === CD + 'frontend.env' || rel === CD + 'backend.env');\n  const mainOk = (rel.indexOf('roles/') === 0 || rel.indexOf('playbooks/') === 0 || rel === 'group_vars/all.yml');\n  if (!clientOk && !mainOk) return block('read not permitted: ' + rel);\n  return out({ allowed: true, action: 'read', mode: 'read', safePath: rel, preparedCommand: 'cat ' + BASE + '/' + rel + ' 2>&1 | head -c 12000' });\n}\nif (action === 'write_waf') {\n  const path = CD + 'modsec-overrides.conf';\n  return out({ allowed: true, action: 'write_waf', mode: 'write', safePath: path, preparedCommand: writeCmd(path, b64(contentStr), 'modsec-overrides.conf.attempt' + attempt + '.bak') });\n}\nif (action === 'set_var') {\n  const allowed = ['app_name', 'app_domain', 'api_domain', 'app_path', 'git_repo', 'git_branch', 'react_repo', 'react_branch', 'react_build_cmd', 'react_output_dir', 'react_build_path', 'react_serve_path', 'deploy_react', 'split_domain', 'ssl_email', 'db_host', 'db_name', 'db_user', 'node_max_heap_mb'];\n  if (allowed.indexOf(key) === -1) return block('key not editable: ' + key);\n  const unquoted = (key === 'deploy_react' || key === 'split_domain' || key === 'node_max_heap_mb');\n  const line = unquoted ? (key + ': ' + val) : (key + ': \"' + val + '\"');\n  const path = CD + 'vars.yml';\n  return out({ allowed: true, action: 'set_var', mode: 'write', safePath: path, key: key, preparedCommand: appendLineCmd(path, b64(line), key + ':', 'vars.yml.attempt' + attempt + '.bak') });\n}\nif (action === 'set_env') {\n  if (envFile !== 'frontend' && envFile !== 'backend') return block('envFile must be frontend or backend');\n  const K = key.toUpperCase();\n  if (K.indexOf('PASSWORD') !== -1 || K.indexOf('SECRET') !== -1 || K.indexOf('TOKEN') !== -1 || K === 'APP_KEY' || K.indexOf('_KEY') !== -1) return block('env key protected: ' + key);\n  let kOk = key.length > 0; for (let i = 0; i < key.length; i++) { const c = key.charAt(i); if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c === '_')) kOk = false; }\n  if (!kOk) return block('invalid env key');\n  const line = key + '=' + val;\n  const path = CD + (envFile === 'frontend' ? 'frontend.env' : 'backend.env');\n  return out({ allowed: true, action: 'set_env', mode: 'write', safePath: path, key: key, preparedCommand: appendLineCmd(path, b64(line), key + '=', envFile + '.env.attempt' + attempt + '.bak') });\n}\nreturn block('unknown action: ' + action);"
+      }
+    },
+    {
+      "id": "d3f4422e-6d6f-42f7-b187-0fcd3451a4bb",
+      "name": "Run on Command Center",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        448,
+        0
+      ],
+      "parameters": {
+        "resource": "command",
+        "operation": "execute",
+        "authentication": "privateKey",
+        "command": "={{ $json.preparedCommand }}"
+      },
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "",
+          "name": "SSH - Command Center"
+        }
+      }
+    },
+    {
+      "id": "96e5d448-0fb7-4d72-8221-9c14ad6efab0",
+      "name": "Redact and Return",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const v = $('Validate and Build Command').item.json;\nif (v.allowed === false) { return [{ json: { ok: false, action: v.action, blocked: true, message: v.message } }]; }\nconst ssh = $json;\nconst raw = String(ssh.stdout || '');\nconst NEWLINE = String.fromCharCode(10);\nlet output = raw;\nif (v.mode === 'read') {\n  const lines = raw.split(NEWLINE).map(function (l) {\n    const low = String(l).toLowerCase();\n    if (low.indexOf('db_password') !== -1 || low.indexOf('password') !== -1 || low.indexOf('secret') !== -1 || low.indexOf('token') !== -1 || low.indexOf('app_key') !== -1 || low.indexOf('private') !== -1) {\n      const ci = l.indexOf(':'); const ei = l.indexOf('=');\n      let sep = -1;\n      if (ci !== -1 && (ei === -1 || ci < ei)) sep = ci; else if (ei !== -1) sep = ei;\n      if (sep !== -1) return l.slice(0, sep + 1) + ' [PROTECTED]';\n      return '[PROTECTED]';\n    }\n    return l;\n  });\n  output = lines.join(NEWLINE);\n}\nconst okFlag = (ssh.code === 0);\nreturn [{ json: { ok: okFlag, action: v.action, mode: v.mode, path: v.safePath || '', output: output.slice(0, 12000) } }];"
+      }
+    }
+  ],
+  "connections": {
+    "When Called by Agent": {
+      "main": [
+        [
+          {
+            "node": "Validate and Build Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate and Build Command": {
+      "main": [
+        [
+          {
+            "node": "Run on Command Center",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run on Command Center": {
+      "main": [
+        [
+          {
+            "node": "Redact and Return",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true
+  },
+  "active": false,
+  "meta": {}
+}

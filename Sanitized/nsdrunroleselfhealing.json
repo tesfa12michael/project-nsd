@@ -1,0 +1,532 @@
+{
+  "name": "NSD — Run Role (Self-Healing)",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "clientName"
+            },
+            {
+              "name": "playbookFile"
+            },
+            {
+              "name": "roleTag"
+            },
+            {
+              "name": "targetIP"
+            },
+            {
+              "name": "timeoutSeconds",
+              "type": "number"
+            },
+            {
+              "name": "runId"
+            },
+            {
+              "name": "maxAttempts",
+              "type": "number"
+            }
+          ]
+        }
+      },
+      "id": "5fb99365-14a1-4d3f-a36d-977aa395c020",
+      "name": "When Role Requested",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const t = $('When Role Requested').first().json;\nreturn [{ json: {\n  clientName: t.clientName,\n  playbookFile: t.playbookFile,\n  roleTag: t.roleTag,\n  targetIP: t.targetIP,\n  timeoutSeconds: Number(t.timeoutSeconds) || 600,\n  runId: t.runId,\n  maxAttempts: Number(t.maxAttempts) || 5\n} }];"
+      },
+      "id": "d723e8f3-974b-41ae-b399-11002003ed2c",
+      "name": "Prep Role Run",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "=cd /opt/ansible && timeout {{ $json.timeoutSeconds }} ansible-playbook -i \"clients/{{ $json.clientName }}/inventory.ini\" \"playbooks/{{ $json.playbookFile }}\" -e \"@clients/{{ $json.clientName }}/vars.yml\" --tags \"{{ $json.roleTag }}\" -v 2>&1; echo \"EXIT_CODE:$?\""
+      },
+      "id": "8ae7fd62-ce2e-4d99-a56a-4b964de0a415",
+      "name": "Run Ansible Role",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        448,
+        80
+      ],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "",
+          "name": "SSH - Command Center"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const NEWLINE = String.fromCharCode(10);\nconst r = $json;\nconst raw = String(r.stdout || '');\nconst idx = raw.lastIndexOf('EXIT_CODE:');\nlet exitCode;\nif (idx >= 0) { exitCode = parseInt(raw.slice(idx + 10).trim(), 10); } else { exitCode = (r.code === 0 ? 0 : 1); }\nif (isNaN(exitCode)) { exitCode = 1; }\nconst success = exitCode === 0;\nlet attempt = 1;\ntry { const inc = $('Increment Attempt').item.json.attempt; if (inc) { attempt = Number(inc); } } catch (e) {}\nconst allLines = raw.split(NEWLINE);\nconst tail = allLines.slice(-40).map(function (l) {\n  const low = String(l).toLowerCase();\n  if (low.indexOf('password') >= 0 || low.indexOf('secret') >= 0 || low.indexOf('token') >= 0 || low.indexOf('private key') >= 0 || low.indexOf('vault') >= 0 || low.indexOf('-----begin') >= 0) { return '[line redacted for secrets]'; }\n  return l;\n});\nconst errorExcerpt = tail.join(NEWLINE).slice(-3500);\nconst recapIdx = raw.lastIndexOf('PLAY RECAP');\nconst recap = recapIdx >= 0 ? raw.slice(recapIdx).slice(0, 800) : '';\nconst t = $('When Role Requested').first().json;\nreturn [{ json: {\n  clientName: t.clientName,\n  roleTag: t.roleTag,\n  playbookFile: t.playbookFile,\n  runId: t.runId,\n  maxAttempts: Number(t.maxAttempts) || 5,\n  exitCode: exitCode,\n  success: success,\n  attempt: attempt,\n  errorExcerpt: errorExcerpt,\n  recap: recap\n} }];"
+      },
+      "id": "95624d13-4931-4b7b-b209-0de9f04ff360",
+      "name": "Parse Ansible Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c-ok",
+              "leftValue": "={{ $json.success }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "2b291fa3-2b48-4614-affb-9eb6c82d165d",
+      "name": "Role Succeeded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        896,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "r1",
+              "name": "status",
+              "value": "success",
+              "type": "string"
+            },
+            {
+              "id": "r2",
+              "name": "roleTag",
+              "value": "={{ $json.roleTag }}",
+              "type": "string"
+            },
+            {
+              "id": "r3",
+              "name": "attempts",
+              "value": "={{ $json.attempt }}",
+              "type": "number"
+            },
+            {
+              "id": "r4",
+              "name": "exitCode",
+              "value": "={{ $json.exitCode }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "39f72838-4d00-4f54-8be3-56a9b2c14559",
+      "name": "Return Success",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1120,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $('Parse Ansible Result').item.json;\nreturn [{ json: Object.assign({}, p, { attempt: Number(p.attempt) + 1 }) }];"
+      },
+      "id": "4920b307-27cc-4e57-b73c-cde351103f52",
+      "name": "Increment Attempt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c-cap",
+              "leftValue": "={{ $json.attempt }}",
+              "rightValue": "={{ $json.maxAttempts }}",
+              "operator": {
+                "type": "number",
+                "operation": "lte"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "40a183d9-b301-437e-9d15-be0fb13c02b3",
+      "name": "Under Attempt Cap?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1344,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=A deployment role failed and will be automatically retried after you apply a fix.\n\nClient: {{ $json.clientName }}\nRole tag: {{ $json.roleTag }}\nrunId: {{ $json.runId }}\nCorrection budget: up to {{ $json.maxAttempts }} total runs of this role.\n\nSanitized Ansible error (tail):\n{{ $json.errorExcerpt }}\n\nPlay recap:\n{{ $json.recap }}\n\nDiagnose the root cause and apply exactly ONE minimal, safe corrective change to the CLIENT files via the Client File Ops Tool, then stop. Do not re-run the role yourself. If the cause is a genuine bug in the main Ansible (not fixable through client config), reply with exactly NO_FIX_FOUND.",
+        "options": {
+          "systemMessage": "You are a senior Ansible and DevOps SRE agent embedded in an automated server-deployment pipeline. A single Ansible role (one tag) has just failed while deploying a full nginx + ModSecurity + PostgreSQL + PHP/Laravel + React stack to a target Ubuntu server. The deployment is fully parametric and reusable: the shared Ansible project (playbooks/, roles/, group_vars/) is NEVER edited — every deployment is driven entirely by the per-client files under clients/<client>/. Your job is to find the true root cause and, when it is fixable through client configuration, apply exactly ONE minimal, correct change to the CLIENT files so that when the workflow automatically re-runs the role, it succeeds. Across successive attempts you are expected to address the full range of client-fixable deployment failures: wrong repo/branch, wrong domains, wrong build/output paths, deploy_react / split_domain flags, memory/heap sizing, non-secret environment variables, and ModSecurity/WAF false positives.\n\nYou have exactly ONE tool, the Client File Ops Tool, and it is deliberately bounded to the client folder. Actions:\n- action=read, path=<repo-relative path>: view a file. You may read the client files (clients/<client>/vars.yml, inventory.ini, modsec-overrides.conf, frontend.env, backend.env) AND, read-only for diagnosis, the failing main role/playbook and group_vars/all.yml (paths under roles/, playbooks/, or group_vars/all.yml). Secret values are redacted.\n- action=set_var, key=<field>, value=<value>: set ONE configuration field in the client vars.yml (e.g. git_branch, react_branch, app_domain, api_domain, app_path, deploy_react, split_domain, node_max_heap_mb, react_build_cmd, react_output_dir). The db_password and any secret are NOT editable.\n- action=set_env, envFile=frontend|backend, key=<KEY>, value=<value>: set ONE non-secret variable in the client frontend.env or backend.env. Secret keys (anything containing PASSWORD, SECRET, TOKEN, KEY, or APP_KEY) are refused.\n- action=write_waf, content=<full file>: replace the client modsec-overrides.conf (WAF tuning) with new content.\nEvery write makes a timestamped backup and returns a unified diff. Always read the relevant files BEFORE writing, and choose the smallest change that fixes the root cause.\n\nWhere fixes live: ALL of your fixes go in clients/<client>/ via the actions above. You must NEVER edit the shared/main Ansible (roles/, playbooks/, group_vars, ansible.cfg) — you may READ it only to understand the failure. If the true root cause is a genuine bug in the MAIN Ansible, or otherwise not fixable through client config, do NOT try to work around it: reply with exactly NO_FIX_FOUND so a human is engaged.\n\nHard rules you must NEVER break:\n1. Never read, write, print, or infer secrets. Never touch ssh-keys, vault files, .key/.pem, the db_password, or any password/secret/token/app_key field. The tool refuses these; do not try to work around it.\n2. Never change the deployment target: inventory.ini is read-only.\n3. Never weaken security to make a check pass: do not disable the WAF or set the ModSecurity engine to Off or DetectionOnly, and do not disable SSH host-key checking.\n4. Never mask failures and never edit the main Ansible.\n5. Make exactly ONE logical fix per turn, then stop. Do NOT re-run the role; the workflow re-runs it and counts attempts for you.\n6. Keep every change idempotent and safe to re-run.\n\nAfter you apply a fix, reply with a short JSON object: {\"changed\":[\"path\"],\"rootCause\":\"one line\",\"fix\":\"one line\",\"expectFixed\":true}. If you cannot find a safe client-side fix (including genuine main-Ansible bugs), write nothing and reply with exactly NO_FIX_FOUND; the workflow will re-run and, once the attempt cap is reached, escalate to a human.",
+          "maxIterations": 20
+        }
+      },
+      "id": "ccb1a1ec-0776-417d-81d2-f01c28ca5192",
+      "name": "AI Self-Correct Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        1632,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "model": "qwen3.7-max",
+        "options": {
+          "temperature": 0.2
+        }
+      },
+      "id": "6ff8806b-f666-4f8c-967c-e259173d0034",
+      "name": "Qwen 3.7 Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAlibabaCloud",
+      "typeVersion": 1,
+      "position": [
+        1568,
+        320
+      ],
+      "credentials": {
+        "alibabaCloudApi": {
+          "id": "",
+          "name": "Alibaba Cloud (Qwen)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('When Role Requested').item.json.runId }}-{{ $('When Role Requested').item.json.roleTag }}",
+        "contextWindowLength": 12
+      },
+      "id": "609106cd-65fd-4981-b10a-191427627d93",
+      "name": "Fix Attempt Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.4,
+      "position": [
+        1696,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "description": "Bounded client-file editor on the command center. Edits ONLY clients/<client>/. action=read (view a client file, or read-only a main role/playbook/group_vars/all.yml for diagnosis; secrets are redacted). action=set_var with key+value (set ONE non-secret field in the client vars.yml; db_password and other secrets refused). action=set_env with envFile=frontend|backend and key+value (set ONE non-secret .env var; any PASSWORD/SECRET/TOKEN/KEY refused). action=write_waf with content (replace the client modsec-overrides.conf with full new content). Every write is backed up and diffed. Refuses main-Ansible writes, ssh-keys, vault, .key/.pem, the inventory target, and path traversal.",
+        "workflowId": {
+          "__rl": true,
+          "value": "oxMXGpPW8Jq2wRzN",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/oxMXGpPW8Jq2wRzN",
+          "cachedResultName": "NSD — Client File Ops (AI Tool)"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "action": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('action', 'One of: read, set_var, set_env, write_waf') }}",
+            "path": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('path', 'For action=read only: repo-relative path under /opt/ansible. Allowed reads: clients/<client>/{vars.yml,inventory.ini,modsec-overrides.conf,frontend.env,backend.env} and read-only roles/<role>/..., playbooks/..., group_vars/all.yml. Empty for other actions.') }}",
+            "key": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('key', 'For set_var: the vars.yml field name. For set_env: the .env variable name. Empty otherwise.') }}",
+            "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('value', 'For set_var / set_env: the new value to set. Empty otherwise.') }}",
+            "content": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('content', 'For action=write_waf only: the full new content of modsec-overrides.conf. Empty otherwise.') }}",
+            "envFile": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('envFile', 'For action=set_env only: frontend or backend. Empty otherwise.') }}",
+            "clientName": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('clientName', 'The deployment client name in lowercase.') }}",
+            "runId": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('runId', 'The deployment run id.') }}",
+            "attempt": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('attempt', 'The current attempt number as a string.') }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "action",
+              "displayName": "action",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "path",
+              "displayName": "path",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "key",
+              "displayName": "key",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "value",
+              "displayName": "value",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "content",
+              "displayName": "content",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "envFile",
+              "displayName": "envFile",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "clientName",
+              "displayName": "clientName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "runId",
+              "displayName": "runId",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "attempt",
+              "displayName": "attempt",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        }
+      },
+      "id": "e83de2d7-8705-4614-8c71-2d9e3c79368c",
+      "name": "Client File Ops Tool",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        1824,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "errorMessage": "=ESCALATE: role \"{{ $json.roleTag }}\" failed after {{ $json.maxAttempts }} attempts (client {{ $json.clientName }}, runId {{ $json.runId }})"
+      },
+      "id": "1e8009c1-5907-4f5a-b823-f55ad5a1ca8e",
+      "name": "Escalate To Human",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        1696,
+        496
+      ]
+    }
+  ],
+  "connections": {
+    "When Role Requested": {
+      "main": [
+        [
+          {
+            "node": "Prep Role Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prep Role Run": {
+      "main": [
+        [
+          {
+            "node": "Run Ansible Role",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Ansible Role": {
+      "main": [
+        [
+          {
+            "node": "Parse Ansible Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Ansible Result": {
+      "main": [
+        [
+          {
+            "node": "Role Succeeded?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Role Succeeded?": {
+      "main": [
+        [
+          {
+            "node": "Return Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Increment Attempt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Increment Attempt": {
+      "main": [
+        [
+          {
+            "node": "Under Attempt Cap?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Under Attempt Cap?": {
+      "main": [
+        [
+          {
+            "node": "AI Self-Correct Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Escalate To Human",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Self-Correct Agent": {
+      "main": [
+        [
+          {
+            "node": "Prep Role Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qwen 3.7 Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Self-Correct Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fix Attempt Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Self-Correct Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Client File Ops Tool": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Self-Correct Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true,
+    "binaryMode": "separate"
+  },
+  "active": false,
+  "meta": {}
+}

@@ -1,0 +1,28 @@
+# Local authoring instructions — not part of the public repository
+CLAUDE.md
+
+# Secrets — never commit. Generate keys locally; see ssh-keys/README.md in the
+# Ansible archive. The published project references credentials by name only.
+ssh-keys/
+*.pem
+*_key
+*_key.pub
+*.retry
+vault.yml
+!vault.yml.example
+.env
+.env.*
+!.env.example
+
+# Ansible working state
+*.log
+.ansible/
+
+# OS and editor cruft
+Thumbs.db
+desktop.ini
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~

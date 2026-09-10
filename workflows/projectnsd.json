@@ -1,0 +1,2027 @@
+{
+  "name": "Project NSD",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Client Deployment Pipeline",
+        "formDescription": "Deploy a full application stack to a new server",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Client Name",
+              "placeholder": "e.g. acme-corp",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Deployment Profile",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "Profile A - Single Server"
+                  },
+                  {
+                    "option": "Profile B - Two Servers"
+                  },
+                  {
+                    "option": "Profile C - Three Servers"
+                  }
+                ]
+              },
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Server 1 IP",
+              "placeholder": "e.g. 192.168.1.100",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Server 1 Root Password",
+              "fieldType": "password",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Server 2 IP",
+              "placeholder": "Leave empty for Profile A"
+            },
+            {
+              "fieldLabel": "Server 2 Root Password",
+              "fieldType": "password"
+            },
+            {
+              "fieldLabel": "Server 3 IP",
+              "placeholder": "Leave empty for Profiles A and B"
+            },
+            {
+              "fieldLabel": "Server 3 Root Password",
+              "fieldType": "password"
+            },
+            {
+              "fieldLabel": "App Domain",
+              "placeholder": "admin.client.com",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "API Domain",
+              "placeholder": "apiDomain"
+            },
+            {
+              "fieldLabel": "SSL Email",
+              "placeholder": "Leave empty to skip SSL"
+            },
+            {
+              "fieldLabel": "Laravel Repo URL",
+              "placeholder": "https://github.com/org/repo"
+            },
+            {
+              "fieldLabel": "Backend ENV Contents",
+              "fieldType": "textarea",
+              "placeholder": "backendEnvContent"
+            },
+            {
+              "fieldLabel": "Laravel Branch",
+              "placeholder": "main"
+            },
+            {
+              "fieldLabel": "React Repo URL",
+              "placeholder": "Leave empty to skip React deployment"
+            },
+            {
+              "fieldLabel": "Frontend ENV Contents",
+              "fieldType": "textarea",
+              "placeholder": "frontendEnvContent"
+            },
+            {
+              "fieldLabel": "React Branch",
+              "placeholder": "main"
+            },
+            {
+              "fieldLabel": "React Build Command",
+              "placeholder": "npm run build"
+            },
+            {
+              "fieldLabel": "React Output Directory",
+              "placeholder": "dist"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.5,
+      "position": [
+        -9472,
+        -4512
+      ],
+      "id": "93754370-8d3e-4b8d-a071-e41e78298d01",
+      "name": "On form submission",
+      "webhookId": ""
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get form submission data from Node 1\nconst formData = $input.first().json;\n\n// ─── CLEAN CLIENT NAME ───────────────────────────────────────\nconst rawClientName = formData['Client Name'] || '';\nconst clientName = rawClientName\n  .toLowerCase()\n  .trim()\n  .replace(/\\s+/g, '-')\n  .replace(/[^a-z0-9-]/g, '');\n\n// ─── GENERATE DATABASE PASSWORD ──────────────────────────────\nconst chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';\nlet dbPassword = '';\nfor (let i = 0; i < 32; i++) {\n  dbPassword += chars.charAt(Math.floor(Math.random() * chars.length));\n}\n\n// ─── DERIVE DATABASE NAME AND USER ───────────────────────────\nconst dbSafeName = clientName.replace(/-/g, '_');\nconst dbName = dbSafeName + '_db';\nconst dbUser = dbSafeName + '_user';\n\n// ─── DEPLOYMENT PROFILE ──────────────────────────────────────\nconst profileRaw = formData['Deployment Profile'] || '';\nlet profile = 'a';\nif (profileRaw.includes('Profile B')) profile = 'b';\nelse if (profileRaw.includes('Profile C')) profile = 'c';\n\n// ─── SELECT PLAYBOOK ─────────────────────────────────────────\nconst playbookFile = `deploy-profile-${profile}.yml`;\n\n// ─── SERVER IPs ──────────────────────────────────────────────\nconst server1IP = (formData['Server 1 IP'] || '').trim();\nconst server2IP = (formData['Server 2 IP'] || '').trim();\nconst server3IP = (formData['Server 3 IP'] || '').trim();\n\n// ─── SERVER PASSWORDS ─────────────────────────────────────────\nconst server1Pass = formData['Server 1 Root Password'] || '';\nconst server2Pass = formData['Server 2 Root Password'] || '';\nconst server3Pass = formData['Server 3 Root Password'] || '';\n\n// ─── DATABASE HOST ───────────────────────────────────────────\nconst dbHost = (profile === 'a') ? 'localhost' : server2IP;\n\n// ─── REACT DEPLOYMENT FLAG ───────────────────────────────────\nconst reactRepo = (formData['React Repo URL'] || '').trim();\nconst deployReact = reactRepo !== '';\n\n// ─── REACT VARIABLES ─────────────────────────────────────────\nconst reactBranch = (formData['React Branch'] || 'main').trim();\nconst reactBuildCmd = (formData['React Build Command'] || 'npm run build').trim();\nconst reactOutputDir = (formData['React Output Directory'] || 'dist').trim();\n\n// ─── APP VARIABLES ───────────────────────────────────────────\nconst appDomain = (formData['App Domain'] || '').trim();\nconst sslEmail = (formData['SSL Email'] || '').trim();\nconst gitRepo = (formData['Laravel Repo URL'] || '').trim();\nconst gitBranch = (formData['Laravel Branch'] || 'main').trim();\n\n// ─── FILE PATHS ──────────────────────────────────────────────\nconst appPath = `/var/www/${clientName}`;\nconst reactBuildPath = `${appPath}-react`;\nconst reactServePath = `${reactBuildPath}/${reactOutputDir}`;\nconst clientDir = `/opt/ansible/clients/${clientName}`;\n\n// ─── API DOMAIN (SPLIT-DOMAIN ARCHITECTURE) ──────────────────\nconst rawApiDomain = (formData['API Domain'] || '').trim();\nlet apiDomain = '';\n\nif (rawApiDomain !== '') {\n  apiDomain = rawApiDomain;\n} else {\n  const frontendEnvRaw = formData['Frontend ENV Contents'] || '';\n  const viteApiMatch = frontendEnvRaw.match(/^VITE_BASE_API_URL=(.+)$/m);\n  const viteProxyMatch = frontendEnvRaw.match(/^VITE_BASE_PROXY=(.+)$/m);\n  let extractedValue = (viteApiMatch ? viteApiMatch[1].trim() : '') ||\n                       (viteProxyMatch ? viteProxyMatch[1].trim() : '');\n  extractedValue = extractedValue.replace(/^[\"']|[\"']$/g, '');\n\n  if (extractedValue && extractedValue.startsWith('http')) {\n    try {\n      const parsedUrl = new URL(extractedValue);\n      const host = parsedUrl.hostname;\n      if (host && host !== 'localhost' && !host.startsWith('127.')) {\n        apiDomain = host;\n      }\n    } catch (e) {\n      apiDomain = '';\n    }\n  }\n}\n\nif (apiDomain === '' && appDomain !== '') {\n  apiDomain = `api.${appDomain}`;\n}\n\n// ─── ENV CONTENT PASSTHROUGH ─────────────────────────────────\nconst frontendEnvContent = formData['Frontend ENV Contents'] || '';\nconst backendEnvContent = formData['Backend ENV Contents'] || '';\n\n// ─── BASE64 ENCODES FOR SAFE SSH TRANSPORT ───────────────────\nconst frontendEnvContentB64 = Buffer.from(frontendEnvContent).toString('base64');\nconst backendEnvContentB64 = Buffer.from(backendEnvContent).toString('base64');\n\n// ─── SPLIT-DOMAIN FLAG ───────────────────────────────────────\nconst splitDomain = deployReact && apiDomain !== '' && apiDomain !== appDomain;\n\n// ─── RETURN ALL VARIABLES ────────────────────────────────────\nreturn [{\n  json: {\n    clientName,\n    appName: clientName,\n    appDomain,\n    sslEmail,\n    gitRepo,\n    gitBranch,\n    reactRepo,\n    reactBranch,\n    reactBuildCmd,\n    reactOutputDir,\n    reactBuildPath,\n    reactServePath,\n    deployReact,\n    appPath,\n    dbName,\n    dbUser,\n    dbPassword,\n    dbHost,\n    profile,\n    playbookFile,\n    server1IP,\n    server2IP,\n    server3IP,\n    server1Pass,\n    server2Pass,\n    server3Pass,\n    nodeMaxHeapMb: \"3072\",\n    clientDir,\n    apiDomain,\n    frontendEnvContent,\n    backendEnvContent,\n    frontendEnvContentB64,\n    backendEnvContentB64,\n    splitDomain\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -9232,
+        -4512
+      ],
+      "id": "926de3b6-8f8d-48fb-a152-19e1cf77430d",
+      "name": "Clean Data"
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "=mkdir -p /opt/ansible/clients/{{ $json.clientName }} && \\\n\ncat > /opt/ansible/clients/{{ $json.clientName }}/vars.yml << 'EOF'\nclient_name: \"{{ $json.clientName }}\"\napp_name: \"{{ $json.clientName }}\"\napp_domain: \"{{ $json.appDomain }}\"\napi_domain: \"{{ $json.apiDomain }}\"\nssl_email: \"{{ $json.sslEmail }}\"\ngit_repo: \"{{ $json.gitRepo }}\"\ngit_branch: \"{{ $json.gitBranch }}\"\nreact_repo: \"{{ $json.reactRepo }}\"\nreact_branch: \"{{ $json.reactBranch }}\"\nreact_build_cmd: \"{{ $json.reactBuildCmd }}\"\nreact_output_dir: \"{{ $json.reactOutputDir }}\"\nreact_build_path: \"{{ $json.reactBuildPath }}\"\nreact_serve_path: \"{{ $json.reactServePath }}\"\ndeploy_react: {{ $json.deployReact }}\nsplit_domain: {{ $json.splitDomain }}\napp_path: \"{{ $json.appPath }}\"\ndb_name: \"{{ $json.dbName }}\"\ndb_user: \"{{ $json.dbUser }}\"\ndb_password: \"{{ $json.dbPassword }}\"\ndb_host: \"{{ $json.dbHost }}\"\nnode_max_heap_mb: {{ $json.nodeMaxHeapMb }}\nEOF\n\ncat > /opt/ansible/clients/{{ $json.clientName }}/inventory.ini << 'EOF'\n[web_servers]\nserver1 ansible_host={{ $json.server1IP }}\n[web_servers:vars]\nansible_user=root\nansible_ssh_private_key_file=/opt/ansible/ssh-keys/ansible_key\nansible_python_interpreter=/usr/bin/python3\nEOF\n\ncat > /opt/ansible/clients/{{ $json.clientName }}/modsec-overrides.conf << 'MODSEC_EOF'\n# NSD baseline ModSecurity hardening (seeded per client; copied to\n# /etc/nginx/modsec-overrides.conf by the nginx-routing role, loaded before CRS rules).\n# 1) Raise OWASP CRS Paranoia Level 1 -> 2 (catches PL1 evasions incl. off-domain RFI).\n# 2) Reject abusively long request URIs (oversized-request / DoS protection).\nSecAction \"id:1000000,phase:1,nolog,pass,t:none,setvar:tx.blocking_paranoia_level=2,setvar:tx.detection_paranoia_level=2\"\nSecRule REQUEST_URI \"@rx ^.{4000,}\" \"id:1000011,phase:1,deny,status:414,t:none,log,msg:'NSD: excessively long request URI',tag:'NSD-DoS'\"\nMODSEC_EOF\n\necho \"{{ $json.frontendEnvContentB64 }}\" | base64 -d > /opt/ansible/clients/{{ $json.clientName }}/frontend.env && \\\n\necho \"{{ $json.backendEnvContentB64 }}\" | base64 -d > /opt/ansible/clients/{{ $json.clientName }}/backend.env && \\\n\necho \"CLIENT_FILES_CREATED:{{ $json.clientName }}\""
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        -8992,
+        -4512
+      ],
+      "id": "ceb35a10-c4f2-45e8-825a-d14038536e2c",
+      "name": "Create Client Files",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "",
+          "name": "SSH - Command Center"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "=sshpass -p '{{ $('Clean Data').item.json.server1Pass }}' ssh-copy-id \\\n  -i /opt/ansible/ssh-keys/ansible_key.pub \\\n  -o StrictHostKeyChecking=no \\\n  root@{{ $('Clean Data').item.json.server1IP }} && \\\necho \"KEY_PROVISIONED:server1:{{ $('Clean Data').item.json.server1IP }}\"\n\n{{ $('Clean Data').item.json.profile !== 'a' ? `\nsshpass -p '${$('Clean Data').item.json.server2Pass}' ssh-copy-id \\\n  -i /opt/ansible/ssh-keys/ansible_key.pub \\\n  -o StrictHostKeyChecking=no \\\n  root@${$('Clean Data').item.json.server2IP} && \\\necho \"KEY_PROVISIONED:server2:${$('Clean Data').item.json.server2IP}\"\n` : 'echo \"SKIPPED:server2:profile-a\"' }}\n\n{{ $('Clean Data').item.json.profile === 'c' ? `\nsshpass -p '${$('Clean Data').item.json.server3Pass}' ssh-copy-id \\\n  -i /opt/ansible/ssh-keys/ansible_key.pub \\\n  -o StrictHostKeyChecking=no \\\n  root@${$('Clean Data').item.json.server3IP} && \\\necho \"KEY_PROVISIONED:server3:${$('Clean Data').item.json.server3IP}\"\n` : 'echo \"SKIPPED:server3:not-profile-c\"' }}"
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        -8784,
+        -4512
+      ],
+      "id": "0cf5a898-47da-45d1-9449-95fdd2d95010",
+      "name": "SSH Key Provisioning",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "",
+          "name": "SSH - Command Center"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "=ansible -i /opt/ansible/clients/{{ $('Clean Data').item.json.clientName }}/inventory.ini \\\n  web_servers \\\n  -m shell \\\n  -a \"mkdir -p /opt/backups && \\\n      tar -czf /opt/backups/nginx-pre-deploy-$(date +%Y%m%d-%H%M%S).tar.gz \\\n      /etc/nginx/ 2>/dev/null || true && \\\n      systemctl list-units --type=service --state=running \\\n      --no-legend --no-pager \\\n      > /opt/backups/services-pre-deploy-$(date +%Y%m%d-%H%M%S).txt && \\\n      echo SNAPSHOT_COMPLETE\" \\\n  --private-key /opt/ansible/ssh-keys/ansible_key \\\n  -u root 2>&1\n\necho \"EXIT_CODE:$?\""
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        -8576,
+        -4512
+      ],
+      "id": "83576381-90d1-458a-b3bb-0b50666950ca",
+      "name": "Pre-Deployment Snapshot",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "",
+          "name": "SSH - Command Center"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "3da9e391-b156-4ec2-987c-a702cbd23aeb",
+              "leftValue": "={{ $('Clean Data').first().json.deployReact }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -7696,
+        -2336
+      ],
+      "id": "f600fde6-889c-43af-9f8a-7198a6b64205",
+      "name": "Deploy React?"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -7232,
+        -2336
+      ],
+      "id": "a9290b6a-fbb3-4466-964f-84ce86beb0d0",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "3b74d3dd-b855-48a1-928b-ff8a136f9920",
+              "leftValue": "={{ $('Clean Data').first().json.sslEmail }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -6768,
+        -2352
+      ],
+      "id": "ac57fd30-b1d0-4fe4-95ff-97395235bc8a",
+      "name": "Deploy SSL?"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -6320,
+        -2352
+      ],
+      "id": "99f18ccd-baa9-4ddb-b13e-3f926e8754b0",
+      "name": "Merge1"
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "=scp -i /opt/ansible/ssh-keys/ansible_key -o StrictHostKeyChecking=no /opt/ansible/files/waf-test.sh root@{{ $('Clean Data').first().json.server1IP }}:/tmp/waf-test.sh && ssh -i /opt/ansible/ssh-keys/ansible_key -o StrictHostKeyChecking=no root@{{ $('Clean Data').first().json.server1IP }} \"chmod +x /tmp/waf-test.sh && bash /tmp/waf-test.sh https://{{ $('Clean Data').first().json.appDomain }} {{ $('Clean Data').first().json.splitDomain ? 'https://' + $('Clean Data').first().json.apiDomain : '' }}\" 2>&1; echo \"EXIT_CODE:$?\""
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        -4864,
+        -1888
+      ],
+      "id": "4c201410-db71-4450-a8a1-ab25040b1472",
+      "name": "Run WAF Security Test",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "",
+          "name": "SSH - Command Center"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "=ssh -i /opt/ansible/ssh-keys/ansible_key -o StrictHostKeyChecking=no root@{{ $('Clean Data').first().json.server1IP }} \"echo '=== SERVICE STATUS ===' && systemctl is-active nginx && systemctl is-active php8.3-fpm && systemctl is-active postgresql && echo '=== HTTP CHECK ===' && curl -s -o /dev/null -w '%{http_code}' http://{{ $('Clean Data').first().json.appDomain }} && echo '=== HTTPS CHECK ===' && curl -s -o /dev/null -w '%{http_code}' https://{{ $('Clean Data').first().json.appDomain }} && echo '=== HEALTH CHECK COMPLETE ==='\" 2>&1; echo \"EXIT_CODE:$?\""
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        -3872,
+        -2288
+      ],
+      "id": "05c0adae-3b8f-4576-ab89-bf8668c16881",
+      "name": "Post-Deployment Health Checks",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "",
+          "name": "SSH - Command Center"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=A ModSecurity WAF security test failed for the deployed site; the workflow will re-apply your override and re-test automatically.\n\nClient: {{ $('Clean Data').first().json.clientName }}\nDomain: https://{{ $('Clean Data').first().json.appDomain }}\nrunId: {{ $('Clean Data').first().json.clientName }}-{{ $execution.id }}\nWAF attempt: {{ $json.wafAttempt }} of {{ $json.maxWafAttempts }}\n\nSanitized WAF test output (tail):\n{{ $json.wafExcerpt }}\n\nDiagnose and apply exactly ONE minimal, safe change to the client ModSecurity override via the Client File Ops Tool (action=write_waf), then stop. If there is no safe client-side WAF fix, reply exactly NO_FIX_FOUND.",
+        "options": {
+          "systemMessage": "You are a senior ModSecurity / OWASP CRS engineer embedded in an automated deployment pipeline. A 13-attack WAF test just ran against the freshly deployed site and did not report FULLY PRODUCTION READY. Make the WAF correct using ONLY the client's ModSecurity override file.\n\nYou have exactly ONE tool, the Client File Ops Tool, bounded to the client folder on the command center:\n- action=read, path=clients/<client>/modsec-overrides.conf — view the current override (you may also read-only roles/modsecurity/... for context; secrets are redacted).\n- action=write_waf, content=<full file> — replace the client modsec-overrides.conf with complete, valid ModSecurity v3 directives. Every write is backed up and diffed.\nThe workflow then deploys your override to the target, restarts nginx, and re-tests — you never do that yourself.\n\nChoosing the ONE fix:\n- False positive (a legitimate/normal request is being blocked): remove or tune ONLY the offending rule id via SecRuleRemoveById or SecRuleUpdateTargetById.\n- You MAY assert 'SecRuleEngine On' in the override.\n- Always action=read the current override before writing; make the smallest idempotent change.\n\nHard rules you must NEVER break:\n1. NEVER disable the WAF: never SecRuleEngine Off or DetectionOnly, never remove CRS rule files, never blanket-allow.\n2. NEVER add SecDefaultAction to the override (it conflicts with crs-setup.conf). If attacks are passing because the engine is not blocking at all (not a false positive), that is NOT client-fixable — reply exactly NO_FIX_FOUND.\n3. Only ever write clients/<client>/modsec-overrides.conf. Never touch anything else. Never print secrets.\n4. Exactly ONE change per turn, then stop; do not re-run the test.\n\nAfter writing, reply with JSON {\"changed\":[\"clients/<client>/modsec-overrides.conf\"],\"rootCause\":\"...\",\"fix\":\"...\",\"expectFixed\":true}. If no safe client-side fix exists, reply exactly NO_FIX_FOUND.",
+          "maxIterations": 15
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -1440,
+        -1776
+      ],
+      "id": "a0a3bc5d-dc72-45d9-a451-7927c0739900",
+      "name": "WAF Fix Agent"
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "=🎉 *DEPLOYMENT SUCCESSFUL*\n\n*Client:* {{ $('Clean Data').first().json.clientName }}\n*Domain:* https://{{ $('Clean Data').first().json.appDomain }}\n*Profile:* {{ $('Clean Data').first().json.profile }}\n*Server:* {{ $('Clean Data').first().json.server1IP }}\n\n*Stack Deployed:*\n✅ Server Hardening\n✅ Nginx + ModSecurity WAF\n✅ PostgreSQL\n✅ Laravel (PHP 8.3)\n{{ $('Clean Data').first().json.deployReact ? '✅ React Frontend' : '⏭️ React — Skipped' }}\n{{ $('Clean Data').first().json.sslEmail ? '✅ SSL Certificate' : '⏭️ SSL — Skipped' }}\n\n*WAF:* ✅ Blocking verified\n*Live check:* independently reachable\n\n*Database:*\n• Name: {{ $('Clean Data').first().json.dbName }}\n• User: {{ $('Clean Data').first().json.dbUser }}\n\n⏱️ {{ new Date().toUTCString() }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "Markdown"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -3424,
+        -2288
+      ],
+      "id": "73327591-2f6f-4f98-b705-586bcdd23fed",
+      "name": "Success Notification",
+      "webhookId": "",
+      "credentials": {
+        "telegramApi": {
+          "id": "",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "=🚨 *DEPLOYMENT ESCALATION — MANUAL REVIEW REQUIRED*\n\n*Client:* {{ $('Clean Data').first().json.clientName }}\n*Domain:* https://{{ $('Clean Data').first().json.appDomain }}\n*Server:* {{ $('Clean Data').first().json.server1IP }}\n*Profile:* {{ $('Clean Data').first().json.profile }}\n\nA deployment step failed after automatic retries / AI self-healing and was escalated. Remaining steps were halted so nothing builds on a broken base.\n\n*Reported error:*\n{{ ($json.error && $json.error.message) ? $json.error.message : ($json.output || 'A pipeline step failed — open this execution in n8n to see which step and the full log.') }}\n\n*Client files to review:*\n• `/opt/ansible/clients/{{ $('Clean Data').first().json.clientName }}/vars.yml`\n• `/opt/ansible/clients/{{ $('Clean Data').first().json.clientName }}/modsec-overrides.conf`\n\n⏱️ {{ new Date().toUTCString() }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "Markdown"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        560,
+        -4608
+      ],
+      "id": "8572f48d-15eb-4eb5-9ad9-2fbe3086932d",
+      "name": "Failure Notification",
+      "webhookId": "",
+      "credentials": {
+        "telegramApi": {
+          "id": "",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "=ssh -i /opt/ansible/ssh-keys/ansible_key \\\n  -o StrictHostKeyChecking=no \\\n  root@{{ $('Clean Data').first().json.server1IP }} \\\n  \"BACKUP_FILE=\\$(ls -t /opt/backups/nginx-pre-deploy-*.tar.gz 2>/dev/null | head -1) && \\\n  if [ -n \\\"\\$BACKUP_FILE\\\" ]; then \\\n    tar -xzf \\\"\\$BACKUP_FILE\\\" -C / && \\\n    nginx -t && \\\n    systemctl reload nginx && \\\n    echo ROLLBACK_COMPLETE:\\$BACKUP_FILE; \\\n  else \\\n    echo ROLLBACK_FAILED:NO_BACKUP_FOUND; \\\n  fi\" 2>&1\n\necho \"EXIT_CODE:$?\""
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        880,
+        -4608
+      ],
+      "id": "59f2f9ad-59d1-49e4-84ba-b3f9f4a9b3e1",
+      "name": "Rollback Agent",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "",
+          "name": "SSH - Command Center"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "qwen3.7-max-2026-06-08",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatAlibabaCloud",
+      "typeVersion": 1,
+      "position": [
+        -1600,
+        -1552
+      ],
+      "id": "0e4d1ee6-a1ff-4936-844c-1fa1ff31bdd8",
+      "name": "Qwen Cloud Chat Model",
+      "credentials": {
+        "alibabaCloudApi": {
+          "id": "",
+          "name": "Alibaba Cloud (Qwen)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "h47rxgf0NbOLHHPb",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/h47rxgf0NbOLHHPb",
+          "cachedResultName": "NSD — Run Role (Self-Healing)"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "clientName": "={{ $('Clean Data').first().json.clientName }}",
+            "playbookFile": "={{ $('Clean Data').first().json.playbookFile }}",
+            "roleTag": "server-hardening",
+            "targetIP": "={{ $('Clean Data').first().json.server1IP }}",
+            "timeoutSeconds": 600,
+            "runId": "={{ $('Clean Data').first().json.clientName }}-{{ $execution.id }}",
+            "maxAttempts": 5
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "clientName",
+              "displayName": "clientName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "playbookFile",
+              "displayName": "playbookFile",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "roleTag",
+              "displayName": "roleTag",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "targetIP",
+              "displayName": "targetIP",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "timeoutSeconds",
+              "displayName": "timeoutSeconds",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "runId",
+              "displayName": "runId",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "maxAttempts",
+              "displayName": "maxAttempts",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "c16e0ff3-a7f2-43d6-b946-5ee5f641e626",
+      "name": "Run Role — Server Hardening",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        -7472,
+        -3984
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "h47rxgf0NbOLHHPb",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/h47rxgf0NbOLHHPb",
+          "cachedResultName": "NSD — Run Role (Self-Healing)"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "clientName": "={{ $('Clean Data').first().json.clientName }}",
+            "playbookFile": "={{ $('Clean Data').first().json.playbookFile }}",
+            "roleTag": "nginx-install",
+            "targetIP": "={{ $('Clean Data').first().json.server1IP }}",
+            "timeoutSeconds": 600,
+            "runId": "={{ $('Clean Data').first().json.clientName }}-{{ $execution.id }}",
+            "maxAttempts": 5
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "clientName",
+              "displayName": "clientName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "playbookFile",
+              "displayName": "playbookFile",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "roleTag",
+              "displayName": "roleTag",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "targetIP",
+              "displayName": "targetIP",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "timeoutSeconds",
+              "displayName": "timeoutSeconds",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "runId",
+              "displayName": "runId",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "maxAttempts",
+              "displayName": "maxAttempts",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "78017035-b3e7-457d-aa2b-ca30ef3061ed",
+      "name": "Run Role — Nginx",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        -7472,
+        -3760
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "h47rxgf0NbOLHHPb",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/h47rxgf0NbOLHHPb",
+          "cachedResultName": "NSD — Run Role (Self-Healing)"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "clientName": "={{ $('Clean Data').first().json.clientName }}",
+            "playbookFile": "={{ $('Clean Data').first().json.playbookFile }}",
+            "roleTag": "modsecurity",
+            "targetIP": "={{ $('Clean Data').first().json.server1IP }}",
+            "timeoutSeconds": 1800,
+            "runId": "={{ $('Clean Data').first().json.clientName }}-{{ $execution.id }}",
+            "maxAttempts": 5
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "clientName",
+              "displayName": "clientName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "playbookFile",
+              "displayName": "playbookFile",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "roleTag",
+              "displayName": "roleTag",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "targetIP",
+              "displayName": "targetIP",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "timeoutSeconds",
+              "displayName": "timeoutSeconds",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "runId",
+              "displayName": "runId",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "maxAttempts",
+              "displayName": "maxAttempts",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "7c5b4eb5-0561-48a3-b7c2-5ebec5ed9152",
+      "name": "Run Role — ModSecurity",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        -7456,
+        -3536
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "h47rxgf0NbOLHHPb",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/h47rxgf0NbOLHHPb",
+          "cachedResultName": "NSD — Run Role (Self-Healing)"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "clientName": "={{ $('Clean Data').first().json.clientName }}",
+            "playbookFile": "={{ $('Clean Data').first().json.playbookFile }}",
+            "roleTag": "postgresql",
+            "targetIP": "={{ $('Clean Data').first().json.server1IP }}",
+            "timeoutSeconds": 600,
+            "runId": "={{ $('Clean Data').first().json.clientName }}-{{ $execution.id }}",
+            "maxAttempts": 5
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "clientName",
+              "displayName": "clientName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "playbookFile",
+              "displayName": "playbookFile",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "roleTag",
+              "displayName": "roleTag",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "targetIP",
+              "displayName": "targetIP",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "timeoutSeconds",
+              "displayName": "timeoutSeconds",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "runId",
+              "displayName": "runId",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "maxAttempts",
+              "displayName": "maxAttempts",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "a4ab477e-c434-40ff-a548-11f572f9c862",
+      "name": "Run Role — PostgreSQL",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        -7456,
+        -3296
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "h47rxgf0NbOLHHPb",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/h47rxgf0NbOLHHPb",
+          "cachedResultName": "NSD — Run Role (Self-Healing)"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "clientName": "={{ $('Clean Data').first().json.clientName }}",
+            "playbookFile": "={{ $('Clean Data').first().json.playbookFile }}",
+            "roleTag": "php-laravel",
+            "targetIP": "={{ $('Clean Data').first().json.server1IP }}",
+            "timeoutSeconds": 900,
+            "runId": "={{ $('Clean Data').first().json.clientName }}-{{ $execution.id }}",
+            "maxAttempts": 5
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "clientName",
+              "displayName": "clientName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "playbookFile",
+              "displayName": "playbookFile",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "roleTag",
+              "displayName": "roleTag",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "targetIP",
+              "displayName": "targetIP",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "timeoutSeconds",
+              "displayName": "timeoutSeconds",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "runId",
+              "displayName": "runId",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "maxAttempts",
+              "displayName": "maxAttempts",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "72429d42-e317-4fea-ba80-b80832a7b225",
+      "name": "Run Role — Laravel",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        -7456,
+        -3056
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "h47rxgf0NbOLHHPb",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/h47rxgf0NbOLHHPb",
+          "cachedResultName": "NSD — Run Role (Self-Healing)"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "clientName": "={{ $('Clean Data').first().json.clientName }}",
+            "playbookFile": "={{ $('Clean Data').first().json.playbookFile }}",
+            "roleTag": "react-frontend",
+            "targetIP": "={{ $('Clean Data').first().json.server1IP }}",
+            "timeoutSeconds": 900,
+            "runId": "={{ $('Clean Data').first().json.clientName }}-{{ $execution.id }}",
+            "maxAttempts": 5
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "clientName",
+              "displayName": "clientName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "playbookFile",
+              "displayName": "playbookFile",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "roleTag",
+              "displayName": "roleTag",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "targetIP",
+              "displayName": "targetIP",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "timeoutSeconds",
+              "displayName": "timeoutSeconds",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "runId",
+              "displayName": "runId",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "maxAttempts",
+              "displayName": "maxAttempts",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "472b03e0-fad7-4a4d-b9fa-ab51dc363748",
+      "name": "Run Role — React Frontend",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        -7440,
+        -2784
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "h47rxgf0NbOLHHPb",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/h47rxgf0NbOLHHPb",
+          "cachedResultName": "NSD — Run Role (Self-Healing)"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "clientName": "={{ $('Clean Data').first().json.clientName }}",
+            "playbookFile": "={{ $('Clean Data').first().json.playbookFile }}",
+            "roleTag": "nginx-routing",
+            "targetIP": "={{ $('Clean Data').first().json.server1IP }}",
+            "timeoutSeconds": 600,
+            "runId": "={{ $('Clean Data').first().json.clientName }}-{{ $execution.id }}",
+            "maxAttempts": 5
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "clientName",
+              "displayName": "clientName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "playbookFile",
+              "displayName": "playbookFile",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "roleTag",
+              "displayName": "roleTag",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "targetIP",
+              "displayName": "targetIP",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "timeoutSeconds",
+              "displayName": "timeoutSeconds",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "runId",
+              "displayName": "runId",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "maxAttempts",
+              "displayName": "maxAttempts",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "cb70d721-6e3d-47c0-aea0-3ba072b14703",
+      "name": "Run Role — Nginx Routing",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        -7040,
+        -2576
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "h47rxgf0NbOLHHPb",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/h47rxgf0NbOLHHPb",
+          "cachedResultName": "NSD — Run Role (Self-Healing)"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "clientName": "={{ $('Clean Data').first().json.clientName }}",
+            "playbookFile": "={{ $('Clean Data').first().json.playbookFile }}",
+            "roleTag": "ssl-setup",
+            "targetIP": "={{ $('Clean Data').first().json.server1IP }}",
+            "timeoutSeconds": 300,
+            "runId": "={{ $('Clean Data').first().json.clientName }}-{{ $execution.id }}",
+            "maxAttempts": 5
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "clientName",
+              "displayName": "clientName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "playbookFile",
+              "displayName": "playbookFile",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "roleTag",
+              "displayName": "roleTag",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "targetIP",
+              "displayName": "targetIP",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "timeoutSeconds",
+              "displayName": "timeoutSeconds",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "runId",
+              "displayName": "runId",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "maxAttempts",
+              "displayName": "maxAttempts",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "579dde83-bffe-4b2e-a33b-82cd74fef507",
+      "name": "Run Role — SSL Setup",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        -6544,
+        -2528
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "h47rxgf0NbOLHHPb",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/h47rxgf0NbOLHHPb",
+          "cachedResultName": "NSD — Run Role (Self-Healing)"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "clientName": "={{ $('Clean Data').first().json.clientName }}",
+            "playbookFile": "={{ $('Clean Data').first().json.playbookFile }}",
+            "roleTag": "verification",
+            "targetIP": "={{ $('Clean Data').first().json.server1IP }}",
+            "timeoutSeconds": 300,
+            "runId": "={{ $('Clean Data').first().json.clientName }}-{{ $execution.id }}",
+            "maxAttempts": 5
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "clientName",
+              "displayName": "clientName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "playbookFile",
+              "displayName": "playbookFile",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "roleTag",
+              "displayName": "roleTag",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "targetIP",
+              "displayName": "targetIP",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "timeoutSeconds",
+              "displayName": "timeoutSeconds",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "runId",
+              "displayName": "runId",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "maxAttempts",
+              "displayName": "maxAttempts",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "ff29d1d5-3fef-4f9a-8e3c-417fc6367302",
+      "name": "Run Role — Verification",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        -5984,
+        -2480
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const NEWLINE = String.fromCharCode(10);\nconst raw = String($json.stdout || '');\nconst wafPass = raw.indexOf('FULLY PRODUCTION READY') !== -1;\nlet wafAttempt = 1;\ntry { const inc = $('Increment WAF Attempt').item.json.wafAttempt; if (inc) { wafAttempt = Number(inc); } } catch (e) {}\nconst lines = raw.split(NEWLINE);\nconst tail = lines.slice(-60).map(function (l) {\n  const low = String(l).toLowerCase();\n  if (low.indexOf('password') >= 0 || low.indexOf('secret') >= 0 || low.indexOf('token') >= 0 || low.indexOf('private key') >= 0 || low.indexOf('-----begin') >= 0) { return '[line redacted]'; }\n  return l;\n});\nconst wafExcerpt = tail.join(NEWLINE).slice(-3500);\nreturn [{ json: { wafPass: wafPass, wafAttempt: wafAttempt, maxWafAttempts: 5, wafExcerpt: wafExcerpt } }];"
+      },
+      "id": "e447fa97-6189-4132-9d07-5be4dc352deb",
+      "name": "Parse WAF Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -4640,
+        -1888
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "waf-pass",
+              "leftValue": "={{ $json.wafPass }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e29bdba8-c086-4305-9dff-c835909410fb",
+      "name": "WAF Passed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -4416,
+        -1888
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $('Parse WAF Result').item.json;\nreturn [{ json: Object.assign({}, p, { wafAttempt: Number(p.wafAttempt) + 1 }) }];"
+      },
+      "id": "35d4e907-5333-4335-8a8e-05cd10bba331",
+      "name": "Increment WAF Attempt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3344,
+        -1904
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "waf-cap",
+              "leftValue": "={{ $json.wafAttempt }}",
+              "rightValue": "={{ $json.maxWafAttempts }}",
+              "operator": {
+                "type": "number",
+                "operation": "lte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ff28cadc-1888-4b1d-b991-6eec4b95d5f9",
+      "name": "Under WAF Cap?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -3120,
+        -1904
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "=scp -i /opt/ansible/ssh-keys/ansible_key -o StrictHostKeyChecking=no /opt/ansible/clients/{{ $('Clean Data').first().json.clientName }}/modsec-overrides.conf root@{{ $('Clean Data').first().json.server1IP }}:/tmp/modsec-overrides.new && ssh -i /opt/ansible/ssh-keys/ansible_key -o StrictHostKeyChecking=no root@{{ $('Clean Data').first().json.server1IP }} 'TS=$(date +%Y%m%d-%H%M%S); cp -a /etc/nginx/modsec-overrides.conf /etc/nginx/modsec-overrides.conf.bak.$TS 2>/dev/null; cp /tmp/modsec-overrides.new /etc/nginx/modsec-overrides.conf; if nginx -t 2>/tmp/nginx_test.log; then systemctl restart nginx && echo APPLY_OK; else LAST=$(ls -t /etc/nginx/modsec-overrides.conf.bak.* 2>/dev/null | head -1); [ -n \"$LAST\" ] && cp \"$LAST\" /etc/nginx/modsec-overrides.conf; echo APPLY_FAILED_NGINX_TEST; cat /tmp/nginx_test.log; fi' 2>&1; echo \"EXIT_CODE:$?\""
+      },
+      "id": "4d98aca4-883b-404f-bb94-553a443eb0a3",
+      "name": "Apply WAF Override to Target",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        -752,
+        -1440
+      ],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "",
+          "name": "SSH - Command Center"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "url": "=http{{ $('Clean Data').first().json.sslEmail ? 's' : '' }}://{{ $('Clean Data').first().json.appDomain }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "id": "12c4838d-f87e-4287-8be4-c0f8faa516f0",
+      "name": "Independent Live Verify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -3648,
+        -2288
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Clean Data').first().json.clientName }}-{{ $execution.id }}-waf",
+        "contextWindowLength": 12
+      },
+      "id": "5cdffa57-9b25-4643-8ff8-a7fb71429dcc",
+      "name": "WAF Fix Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.4,
+      "position": [
+        -1440,
+        -1552
+      ]
+    },
+    {
+      "parameters": {
+        "description": "Bounded client-file editor on the command center. For WAF fixes: action=write_waf with content=<full modsec-overrides.conf>. Also action=read clients/<client>/modsec-overrides.conf (or read-only roles/modsecurity/...). Edits ONLY clients/<client>/; refuses everything else; secrets redacted.",
+        "workflowId": {
+          "__rl": true,
+          "value": "oxMXGpPW8Jq2wRzN",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/oxMXGpPW8Jq2wRzN",
+          "cachedResultName": "NSD — Client File Ops (AI Tool)"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "action": "={{ $fromAI('action', 'read or write_waf') }}",
+            "path": "={{ $fromAI('path', 'For read only, e.g. clients/<client>/modsec-overrides.conf') }}",
+            "key": "={{ $fromAI('key', 'empty for WAF') }}",
+            "value": "={{ $fromAI('value', 'empty for WAF') }}",
+            "content": "={{ $fromAI('content', 'For write_waf: full modsec-overrides.conf content') }}",
+            "envFile": "={{ $fromAI('envFile', 'empty for WAF') }}",
+            "clientName": "={{ $('Clean Data').first().json.clientName }}",
+            "runId": "={{ $('Clean Data').first().json.clientName }}-{{ $execution.id }}",
+            "attempt": "={{ $fromAI('attempt', 'current WAF attempt number as string') }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "action",
+              "displayName": "action",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "path",
+              "displayName": "path",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "key",
+              "displayName": "key",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "value",
+              "displayName": "value",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "content",
+              "displayName": "content",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "envFile",
+              "displayName": "envFile",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "clientName",
+              "displayName": "clientName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "runId",
+              "displayName": "runId",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "attempt",
+              "displayName": "attempt",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        }
+      },
+      "id": "4b833156-4552-4d54-b25a-c1e05f04b9a3",
+      "name": "Client File Ops Tool",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        -1280,
+        -1552
+      ]
+    }
+  ],
+  "connections": {
+    "On form submission": {
+      "main": [
+        [
+          {
+            "node": "Clean Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clean Data": {
+      "main": [
+        [
+          {
+            "node": "Create Client Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Client Files": {
+      "main": [
+        [
+          {
+            "node": "SSH Key Provisioning",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failure Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SSH Key Provisioning": {
+      "main": [
+        [
+          {
+            "node": "Pre-Deployment Snapshot",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failure Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deploy React?": {
+      "main": [
+        [
+          {
+            "node": "Run Role — React Frontend",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Deploy SSL?": {
+      "main": [
+        [
+          {
+            "node": "Run Role — SSL Setup",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Failure Notification": {
+      "main": [
+        [
+          {
+            "node": "Rollback Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qwen Cloud Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "WAF Fix Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pre-Deployment Snapshot": {
+      "main": [
+        [
+          {
+            "node": "Run Role — Server Hardening",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failure Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Role — Server Hardening": {
+      "main": [
+        [
+          {
+            "node": "Run Role — Nginx",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failure Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Role — Nginx": {
+      "main": [
+        [
+          {
+            "node": "Run Role — ModSecurity",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failure Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Role — ModSecurity": {
+      "main": [
+        [
+          {
+            "node": "Run Role — PostgreSQL",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failure Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Role — PostgreSQL": {
+      "main": [
+        [
+          {
+            "node": "Run Role — Laravel",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failure Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Role — Laravel": {
+      "main": [
+        [
+          {
+            "node": "Deploy React?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failure Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Role — React Frontend": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failure Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Run Role — Nginx Routing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Role — Nginx Routing": {
+      "main": [
+        [
+          {
+            "node": "Deploy SSL?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failure Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Role — SSL Setup": {
+      "main": [
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failure Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge1": {
+      "main": [
+        [
+          {
+            "node": "Run Role — Verification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Role — Verification": {
+      "main": [
+        [
+          {
+            "node": "Run WAF Security Test",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failure Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run WAF Security Test": {
+      "main": [
+        [
+          {
+            "node": "Parse WAF Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse WAF Result": {
+      "main": [
+        [
+          {
+            "node": "WAF Passed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WAF Passed?": {
+      "main": [
+        [
+          {
+            "node": "Post-Deployment Health Checks",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Increment WAF Attempt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Increment WAF Attempt": {
+      "main": [
+        [
+          {
+            "node": "Under WAF Cap?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Under WAF Cap?": {
+      "main": [
+        [
+          {
+            "node": "WAF Fix Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failure Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WAF Fix Agent": {
+      "main": [
+        [
+          {
+            "node": "Apply WAF Override to Target",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply WAF Override to Target": {
+      "main": [
+        [
+          {
+            "node": "Run WAF Security Test",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failure Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post-Deployment Health Checks": {
+      "main": [
+        [
+          {
+            "node": "Independent Live Verify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Independent Live Verify": {
+      "main": [
+        [
+          {
+            "node": "Success Notification",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failure Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Client File Ops Tool": {
+      "ai_tool": [
+        [
+          {
+            "node": "WAF Fix Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WAF Fix Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "WAF Fix Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "active": false,
+  "meta": {}
+}
